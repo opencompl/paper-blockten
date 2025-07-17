@@ -106,7 +106,7 @@
 \definecolor{pairedSixDarkRed}{HTML}{e31a1c}
 
 \createtodoauthor{grosser}{pairedOneLightBlue}
-\createtodoauthor{authorTwo}{pairedTwoDarkBlue}
+\createtodoauthor{ivan}{pairedTwoDarkBlue}
 \createtodoauthor{authorThree}{pairedThreeLightGreen}
 \createtodoauthor{authorFour}{pairedFourDarkGreen}
 \createtodoauthor{authorFive}{pairedFiveLightRed}
@@ -352,10 +352,12 @@ This small operation set is supported by the DSLs of many machine learning frame
 
 While suitable for programming neural networks and other scientific programs, the semantics of tensor programming languages are too high level to properly optimize for the hardware, in particular, GPUs. Diametrically opposed are thread programming languages such as CUDA, OpenCL and compute shaders, which operate on a SIMT model. SIMT programming languages allow programmers to properly specify and tile the work for the hardware, at the cost of losing the expressibility of tensor languages. To both capture the high-level semantics of tensor languages and the low-level control afforded by thread languages, block programming languages such as Triton were devised. As a matter of fact, the PyTorch attention kernel is written in Triton.
 
-However, while block programming languages prove to make writing linear algebra kernels easier for performance engineers, the same cannot be said for research engineers writing in PyTorch. The pointer arithmetic calcifies the mathematics involved, making iteration and experimentation on the mathematics of the program difficult to achieve. Within the field of exploring attention variants, our work provides a framework to make it easier for compilers to easily optimize the attention mechanism itself, while retaining only the high-level semantics of tensor semantics.
+However, while block programming languages prove to make writing linear algebra kernels easier for performance engineers, the same cannot be said for research engineers writing in PyTorch. The pointer arithmetic calcifies the mathematics involved, making iteration and experimentation on the mathematics of the program difficult to achieve. Within the field of exploring attention variants, our work provides a framework to make it easier for compilers to easily optimize the attention mechanism itself, while retaining only the high-level semantics of tensor semantics. \ivan{i like the transition, i don't like the words.}
 
 \section{Implementation}
 \label{sec:implementation}
+
+In this section, we will describe how describing attention as a series of perfect loop nests makes it far easier for the compiler to automatically optimize the mechanism.
 
 First, rather than work on the mathematical description of attention, the transformations we are applying will be far clearer by being written as an algorithm.
 
@@ -365,6 +367,8 @@ In the MLIR compiler framework, the tensor programming language is expressed usi
 A producing operation can be trivially merged into a consuming operation if the iteration domain matches.
 
 However, the same cannot be said of reduction loops. Due to intra-loop dependencies to produce the result of the reduction, a producer-consumer pair of reductions is non-trivial to fuse, let alone automatically. The softmax algorithm is one such pattern, and a suitable online algorithm that fuses the max and sum loops can be found in \cite{milakov_online_2018}. We focus on Flash Attention 2 because the primary contribution of both it and Flash Attention are through the algorithm which tiles the Flash Attention computation to maximize occupancy on graphics cards.
+
+\ivan{i wonder if by doing so, autodiff of attention is also easier to derive/optimize?}
 
 \section{Related Work}
 
