@@ -350,23 +350,63 @@ The naive approach to writing an attention variant is to use a tensor programmin
 \end{itemize}
 This small operation set is supported by the DSLs of many machine learning frameworks, such as PyTorch, TensorFlow and cuDNN.
 
-While suitable for programming neural networks and other scientific programs, the semantics of tensor programming languages are too high level to properly optimize for the hardware, in particular, GPUs. Diametrically opposed are thread programming languages such as CUDA, OpenCL and compute shaders, which operate on a SIMT model. SIMT programming languages allow programmers to properly specify and tile the work for the hardware, at the cost of losing the expressibility of tensor languages. To both capture the high-level semantics of tensor languages and the low-level control afforded by thread languages, block programming languages such as Triton were devised. As a matter of fact, the PyTorch attention kernel is written in Triton.
+While suitable for programming neural networks and other scientific programs, the semantics of tensor programming languages are too high level to properly optimize for the hardware, in particular, GPUs. Diametrically opposed are thread programming languages such as CUDA, OpenCL and compute shaders, which operate on a SIMT model. SIMT programming languages allow programmers to properly specify and tile the work for the hardware, at the cost of losing the expressibility of tensor languages. 
 
-However, while block programming languages prove to make writing linear algebra kernels easier for performance engineers, the same cannot be said for research engineers writing in PyTorch. The pointer arithmetic calcifies the mathematics involved, making iteration and experimentation on the mathematics of the program difficult to achieve. Within the field of exploring attention variants, our work provides a framework to make it easier for compilers to easily optimize the attention mechanism itself, while retaining only the high-level semantics of tensor semantics. \ivan{i like the transition, i don't like the words.}
+\paragraph{Block programming languages} To both capture the high-level semantics of tensor languages and the low-level control afforded by thread languages, block programming languages such as Triton were devised. Where thread languages operate on a SIMT model, designating a program ID per thread, block programming languages are defined per block. Each block is assigned a program ID, and corresponds to a work group in OpenCL or a thread block in CUDA. The thread distribution of a block is left up to the compiler to designate. Block programming languages have since supplanted low-level thread languages' place for writing tensor kernels -- to wit, the default PyTorch attention kernel is written in Triton.
+
+While block programming languages prove to make writing linear algebra kernels easier for performance engineers, the same cannot be said for research engineers writing in tensor languages. The optimizations calcify the mathematics into code, making iteration and experimentation on the mathematics of the program much more tediou. Within the field of exploring attention variants, our work provides a framework to make it easier for compilers to easily optimize the attention mechanism itself, while retaining only the high-level semantics of tensor semantics. \ivan{i like the transition, i don't like the words.}
 
 \section{Implementation}
 \label{sec:implementation}
 
+\begin{algorithm}
+  \caption{Attention, expressed as a series of for loops\label{alg:dot-attention}}
+  \begin{algorithmic}[1]
+  \Function{Attention}{
+    $Q : \mathbb{R}^{N \times d}$,
+    $K : \mathbb{R}^{N \times d}$,
+    $V : \mathbb{R}^{N \times d}$}
+
+    \State $S, P : \mathbb{R}^{N \times N} \qquad 
+            m, \sigma :\mathbb{R}^N$
+    \State Initialize $m = (0)^N, \quad \sigma = (-\infty)^N$
+
+    % matmul
+    \ForAll {$i,j,k \in [N,N,d]$} 
+      \State $S_{i,j} = Q_{i,k} \cdot K_{j,k}$
+    \EndFor
+
+    % softmax
+    \ForAll {$i,j \in [N,N]$} \Comment \emph{reduction}
+      \State $m_i = \text{max}(m_i, S_{i,j})$
+    \EndFor
+    \ForAll {$i,j \in [N,N]$} \Comment \emph{reduction}
+      \State $\sigma_i = \sigma_i + e^{m_i - S_{i,j}}$
+    \EndFor
+    \ForAll {$i,j \in [N,N]$} 
+      \State $P_{i,j} = (e^{m_i - S_{i,j}}) / \sigma_i$
+    \EndFor
+
+    %matmul
+    \ForAll {$i,j,k \in [N,d,N]$} 
+      \State $O_{i,j} = P_{i,k} \cdot V_{k,j}$
+    \EndFor
+
+    \Return $O$
+  \EndFunction
+  \end{algorithmic}
+\end{algorithm}
+
 In this section, we will describe how describing attention as a series of perfect loop nests makes it far easier for the compiler to automatically optimize the mechanism.
 
-First, rather than work on the mathematical description of attention, the transformations we are applying will be far clearer by being written as an algorithm.
+First, rather than work with the mathematical description of attention as per Equation~\ref{eqn:dot-attention}, the transformations we are applying will be far clearer being written as an algorithm, presented in Algorithm~\ref{alg:dot-attention}.
+
 
 \subsection{Compiler Transformations}
-In the MLIR compiler framework, the tensor programming language is expressed using the `linalg` dialect. This dialect encodes operations as sets of \emph{perfect loop nests} with affine indexing, with each iterating loop marked as either a 'parallel' or 'reduction' loop.
+In the MLIR compiler framework, the tensor programming language is expressed using the `linalg` dialect \cite{noauthor_linalg_nodate}. This dialect encodes operations as sets of \emph{perfect loop nests} with affine indexing, with each iterating loop marked as either a \emph{parallel} or \emph{reduction} loop. These semantis were inherited from Tensor Comprehensions \cite{vasilache_tensor_2018}.
 
-A producing operation can be trivially merged into a consuming operation if the iteration domain matches.
-
-However, the same cannot be said of reduction loops. Due to intra-loop dependencies to produce the result of the reduction, a producer-consumer pair of reductions is non-trivial to fuse, let alone automatically. The softmax algorithm is one such pattern, and a suitable online algorithm that fuses the max and sum loops can be found in \cite{milakov_online_2018}. We focus on Flash Attention 2 because the primary contribution of both it and Flash Attention are through the algorithm which tiles the Flash Attention computation to maximize occupancy on graphics cards.
+A producing parallel operation can be trivially merged into a consuming parallel operation if the iteration domain matches.
+However, the same cannot be said of reduction loops. Due to intra-loop dependencies, a producer-consumer pair of reductions is non-trivial to fuse manually, let alone automatically. The softmax algorithm is one such pattern -- observe how, in Algorithm~\ref{alg:dot-attention}, the max result $m$ is produced by the loop at Line 5, then used in the consuming loop in Line 8. Fortunately, an online algorithm for softmax that fuses the max and sum loops has been divised \cite{milakov_online_2018}, and is the fusion that Flash Attention~\cite{dao_flashattention_2022} uses in most of its variants.
 
 \ivan{i wonder if by doing so, autodiff of attention is also easier to derive/optimize?}
 
@@ -382,7 +422,7 @@ However, the same cannot be said of reduction loops. Due to intra-loop dependenc
 }
 
 \section{Conclusion}
-\lipsum[1]
+
 
 %% Acknowledgments
 \begin{acks}                            %% acks environment is optional
