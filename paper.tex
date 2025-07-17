@@ -307,9 +307,55 @@ the remaining paper should be to support the claims stated here.
   \item A compiler implementation that can apply such block-level optimizations to said tensor program.
 \end{itemize}
 
-\section{Our New Idea}
+\section{Background}
 
-% \lipsum[1-3]
+% Attention is just softmax(Q * K.T) @ V
+%
+% We will write this in linalg to demonstrate the higher level abstraction
+%    - linalg.matmul
+%    - linalg.softmax
+%        - reduction to find max
+%        - reduction to find sum
+%        - elemwise to divide by e^(sum - max)
+%    - linalg.matmul
+%
+% Online softmax replaces the softmax operation
+%   - Why can't you automatically fuse the reduction loops of softmax?
+%   - Know that sometimes, you won't want to do this, because online softmax also changes the numerics
+%
+% Flash Attention 2 optimization is the fusion and subsequent tiling of the reduction loops
+
+\subsection{Attention}
+
+% A multitude of attention variants  have sprung up in lieu of the observation that attention is the primary mechanism in Large Language Models\cite{vaswani_attention_2023}. In particular, we isolate the Flash Attention algorithm as the target of our optimization, as it expresses attention in the form of perfect loop nests with affine indexing. This form is easy for compilers to apply classical optimization techniques such as tiling and loop fusion, and has been encoded in the MLIR framework as the `linalg' dialect.
+
+\begin{equation}
+  \label{eqn:attention}
+  \text{Attention}(\mathbf{Q}, \mathbf{K}, \mathbf{V}) = \text{softmax}(\frac{\mathbf{Q} \mathbf{K}^T}{\sqrt{d_k}}) \mathbf{V}
+\end{equation}
+\begin{equation}
+  \label{eqn:dot-attention}
+  \mathbf{S} = \mathbf{Q} \mathbf{K}^T, \quad \mathbf{P} = \text{softmax}(\mathbf{S}), \quad \mathbf{O} = \mathbf{P} \mathbf{V}
+\end{equation}
+
+Attention has been observed to be the primary mechanism in large language models~\cite{vaswani_attention_2023}. While scaled dot product attention (as expressed in Equation~\ref{eqn:attention}) is the most common, a litany of attention variants (\cite{dao_flashattention_2022, dao_flashattention-2_2023}) have arisen ever since. The focus of this paper will be on the Flash Attention~2 \cite{dao_flashattention-2_2023} variant, which uses dot product attention (Equation~\ref{eqn:dot-attention}), and will demonstrate how other attention variants are derivable from it.
+
+\subsection{Tensor Programming}
+
+The naive approach to writing an attention variant is to use a tensor programming language. Typically, a tensor language supports the following features:
+\begin{itemize}
+  \item Element-wise tensor operations
+  \item Linear algebra operations (matrix multiplication, dot product)
+  \item Automatic shape matching
+\end{itemize}
+This small operation set is supported by the DSLs of many machine learning frameworks, such as PyTorch, TensorFlow and cuDNN.
+
+\subsection{Compiler Transformations}
+In the MLIR compiler framework, the tensor programming language is expressed using the `linalg` dialect. This dialect encodes operations as sets of \emph{perfect loop nests} with affine indexing, with each iterating loop marked as either a 'parallel' or 'reduction' loop.
+
+A producing parallel loop can be trivially merged into a consuming parallel loop if the iteration domain matches.
+
+However, the same cannot be said of reduction loops. Due to intra-loop dependencies to produce the result of the reduction, a producer-consumer pair of reductions is non-trivial to fuse automatically. The softmax algorithm is one such pattern. We focus on Flash Attention 2 because the primary contribution of both it and Flash Attention are the ability to tile and 
 
 \section{Implementation}
 \label{sec:implementation}
@@ -317,6 +363,7 @@ the remaining paper should be to support the claims stated here.
 \section{Related Work}
 
 % \lipsum[1-3]
+
 
 \grosser{Related work should always be at the end of the document,
          as it otherwise becomes an obstacle your reader must
