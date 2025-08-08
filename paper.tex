@@ -164,11 +164,12 @@
 \renewcommand{\sectionautorefname}{Section}
 \renewcommand{\subsectionautorefname}{Section}
 \renewcommand{\subsubsectionautorefname}{Section}
+\newcommand{\algorithmautorefname}{Algorithm}
 
 \begin{document}
 
 %% Title information
-\title[BlockTendo]{Enabling block-level compiler optimizations in tensor programs}       %% [Short Title] is optional;
+\title[BlockTendo]{Attention Comprehension: Extensible compiler optimization of attention kernels }       %% [Short Title] is optional;
                                       %% when present, will be used in
                                       %% header instead of Full Title.
 % \subtitle{Subtitle}                   %% \subtitle is optional
@@ -260,50 +261,26 @@
 
 \section{Introduction}
 
-% Of this super cool article \ldots
-% \grosser{A simple comment refering to a particular location}
+Ever since it was decreed that attention was all you needed, the attention mechanism in large language models has been heavily iterated upon at every level of abstraction. Variations can range from the high-level mathematical domain via activation functions or score modifiers, to the low-level hardware domain introducing tensor operations, quantizations and entirely new floating point representations. Despite being a rather simple mechanism, every step of the mechanism is being optimized by teams of researchers and engineers, and no single abstraction can effectively enable all of these variants at all abstraction levels.
 
-% If there is \authorTwo[some text we want to refer to specifically]{this looks
-% particularly interesting} we can refer to this text from within our comments.
+Traditionally, machine learning engineers would prefer to write attention in a high-level tensor language such as PyTorch or TensorFlow
+\ivan{todo: find statistics to back this up}. Features such as automatic shape broadcasting and $N$-dimensional vectors keep the mathematics clean and visible, which allow quick iteration by introducing score modifiers, alternative activation functions, quantization, etc. However, the trouble with using such a high level representation is that it is not trivial to automatically optimize for the hardware 
+\ivan{which we will cover in a later section}.
 
-% And here we only mark \authorTwo[text]{} that is \authorTwo[interesting]{}, but do not
-% actually comment.
+Traditionally, close-to-the-metal kernel programming languages such as CUDA and OpenCL have been used to write code that clearly described the semantics of the hardware, such as the use of hardware-specific instructions and the distribution of work. These kernel programming languages operated on the single-program, multiple-data (SPMD) model, where each thread is assigned a single program instance. They allowed programmers to reason about the parallelism of the program and define exactly which data each thread would fetch, and how the threads would cooperate and synchronize. With such low-level semantics, however, the mathematics of the kernel became obscured and tended to be difficult to iterate upon.
 
-% Now we have a sequence of comments,
-% \authorThree{Comment 3}
-% \authorFour{Comment 4}
-% \authorFive{Comment 5}
-% \authorSix{Comment 6}
-% which should not introduce overlong white space sequences.
+Block programming languages (eg. Triton, TileIR, etc.) were devised as a middle-ground solution, bringing tensor operations and shape broadcasts to the kernel languages while retaining the pointer arithmetic and workgroup distribution. However, rather than operate on individual threads, programmers now reasoned about individual workgroups, leaving the distribution and synchronization to the compiler to handle. This approach was incredibly successful, and even PyTorch's own attention mechanism ($\texttt{scaled\_dot\_product\_attention}$) is written as a Triton kernel. However, by retaining both mathematical and hardware semantics, block languages also keep the issue of obscuring the mathematics of the program and calcifying the program against further experimentation, albeit to a lower degree. As a bottom-up approach, block programming languages enabled kernel programmers to more easily write kernels, however, they did not lower the barrier to entry for high-level programmers.
 
-% Sometimes it is also important to \emph{emphasize} text to understand if it is
-% underlined or printed in italic.
+The machine learning compiler community, as well as this paper, adopts a top-down approach. Rather than introducing high-level semantics to a low-level representation, machine learning compilers heavily utilize tiling to automatically lower to low-level semantics while retaining the high-level representation. The result is a program where the mathematics remains clear and visible, although in practice, a compiler-optimized kernel can never reach the speed of a hand-written kernel, only get close.
 
-% We sometimes use macros to state that a tool as the name \toolname{} in a
-% flexible way.
-
-% \lipsum[1-3]
-
-% \begin{figure}
-% Link to figure
-%
-% https://docs.google.com/drawings/d/1juKp43D3rLC-luBQPwQZ_wCnDK2S_6C1k6USV0wKE0g/edit?usp=sharing
-% \includegraphics[width=\columnwidth]{overview.pdf}
-% \caption{Our key idea visualized}
-% \grosser{Replace this figure with your own drawing.}
-% \end{figure}
+Our paper describes a technique for writing attention in a tensor programming language such that the compiler is able to tile it. In particular, we isolate the exponentiation pattern in the softmax mechanism and transform it into an online algorithm, as per the work of Milakov et al.~\cite{milakov_online_2018}. We chose to isolate our problem to attention as this rewrite significantly changes the floating point arithmetic of the program, preventing the rewrite from being applied in generic situations. Even so, attention as a field of research still garners enough effort that it makes sense to target it specifically.
 
 \vspace{.5em}
 \noindent
-Our contributions are:
-\grosser{Always state your contributions explicitly: (A) this makes it
-easy for the reader to understand what novelty is presented, and (B)
-these contributions help you to focus. In particular, the objective of
-the remaining paper should be to support the claims stated here.
-}
+Therefore, our contributions are as follows:
 \begin{itemize}
 	% \item Contribution 1 (\autoref{sec:implementation})
-	\item A technique for writing tensor programs such that compilers are able to easily optimize them. 
+	\item A technique for writing attention such that compilers are able to easily tile them
   \item A compiler implementation that can apply such block-level optimizations to said tensor program.
 \end{itemize}
 
@@ -338,7 +315,7 @@ the remaining paper should be to support the claims stated here.
   \mathbf{S} = \mathbf{Q} \mathbf{K}^T, \quad \mathbf{P} = \text{softmax}(\mathbf{S}), \quad \mathbf{O} = \mathbf{P} \mathbf{V}
 \end{equation}
 
-Attention has been observed to be the primary mechanism in large language models~\cite{vaswani_attention_2023}. While scaled dot product attention (as expressed in Equation~\ref{eqn:attention}) is the most common, a litany of attention variants (\cite{dao_flashattention_2022, dao_flashattention-2_2023}) have arisen ever since. The focus of this paper will be on the Flash Attention~2 \cite{dao_flashattention-2_2023} variant, which uses dot product attention (Equation~\ref{eqn:dot-attention}), and will demonstrate how other attention variants are derivable from it.
+Attention has been observed to be the primary mechanism in large language models~\cite{vaswani_attention_2023}. While scaled dot product attention (as expressed in \autoref{eqn:attention}) is the most common, a litany of attention variants (\cite{dao_flashattention_2022, dao_flashattention-2_2023}) have arisen ever since. The focus of this paper will be on the Flash Attention~2 \cite{dao_flashattention-2_2023} variant, which uses dot product attention (\autoref{eqn:dot-attention}), and will demonstrate how other attention variants are derivable from it.
 
 \subsection{Tensor and Block Programming}
 
@@ -369,7 +346,7 @@ While block programming languages prove to make writing linear algebra kernels e
 
     \State $S, P : \mathbb{R}^{N \times N} \qquad 
             m, \sigma :\mathbb{R}^N$
-    \State Initialize $m = (0)^N, \quad \sigma = (-\infty)^N$
+    \State Initialize $m = (-\infty)^N \quad \sigma = (0)^N$,
 
     % matmul
     \ForAll {$i,j,k \in [N,N,d]$} 
@@ -399,14 +376,43 @@ While block programming languages prove to make writing linear algebra kernels e
 
 In this section, we will describe how describing attention as a series of perfect loop nests makes it far easier for the compiler to automatically optimize the mechanism.
 
-First, rather than work with the mathematical description of attention as per Equation~\ref{eqn:dot-attention}, the transformations we are applying will be far clearer being written as an algorithm, presented in Algorithm~\ref{alg:dot-attention}.
+First, rather than work with the mathematical description of attention as per 
+\autoref{eqn:dot-attention}, the transformations we are applying will be far clearer being written as an algorithm, presented in \autoref{alg:dot-attention}.
 
 
 \subsection{Compiler Transformations}
-In the MLIR compiler framework, the tensor programming language is expressed using the `linalg` dialect \cite{noauthor_linalg_nodate}. This dialect encodes operations as sets of \emph{perfect loop nests} with affine indexing, with each iterating loop marked as either a \emph{parallel} or \emph{reduction} loop. These semantis were inherited from Tensor Comprehensions \cite{vasilache_tensor_2018}.
+In the MLIR compiler framework, the tensor programming language is expressed using the `linalg` dialect \cite{noauthor_linalg_nodate}. This dialect encodes operations as sets of \emph{perfect loop nests} with affine indexing, with each iterating loop marked as either a \emph{parallel} or \emph{reduction} loop. These semantics were inherited from Tensor Comprehensions 
+\cite{noauthor_linalg_nodate, vasilache_tensor_2018}, which are in turn, derived from Einstein summation notation.
 
 A producing parallel operation can be trivially merged into a consuming parallel operation if the iteration domain matches.
-However, the same cannot be said of reduction loops. Due to intra-loop dependencies, a producer-consumer pair of reductions is non-trivial to fuse manually, let alone automatically. The softmax algorithm is one such pattern -- observe how, in Algorithm~\ref{alg:dot-attention}, the max result $m$ is produced by the loop at Line 5, then used in the consuming loop in Line 8. Fortunately, an online algorithm for softmax that fuses the max and sum loops has been divised \cite{milakov_online_2018}, and is the fusion that Flash Attention~\cite{dao_flashattention_2022} uses in most of its variants.
+However, the same cannot be said of reduction loops. Due to intra-loop dependencies, a producer-consumer pair of reductions is non-trivial to fuse manually, let alone automatically. 
+
+\subsection{Manual Transformations}
+The softmax algorithm exhibits the trait of being a producer-consumer pair of reduction loops. Observe how, in Algorithm~\ref{alg:dot-attention}, the max result $m$ is produced by the loop at Line 5, then used in the consuming loop in Line 8 to compute $\sigma$. However, fusion can be done manually.
+
+
+\begin{algorithm}
+  \caption{Online softmax algorithm~\cite{milakov_online_2018} \label{alg:online-softmax}}
+  \begin{algorithmic}[1]
+  \Function{Softmax}{$x: \mathbb{R}^{N}$}
+    
+    \State $y = \mathbb{R}^{N}, m, d :\mathbb{R}^{N+1}$
+    \State Initialize $m_0 = (-\infty)^N, \quad d_0 = (0)^N$
+
+    \For {$i = 1 \to N$} 
+      \State $m_{j} = \text{max}(m_{j-1}, x_j)$
+      \State $d_j = d_{j-1} \times e^{m_{j - 1} - m_j} + e^{x_j - m_j}$
+    \EndFor
+    \ForAll {$i \in [N]$} 
+      \State $y_{i} = (e^{x_i - m_N}) / d_N$
+    \EndFor
+    
+    \Return $y$
+  \EndFunction
+  \end{algorithmic}
+\end{algorithm}
+
+The online softmax algorithm developed by Milakov~\cite{milakov_online_2018} is shown in \autoref{alg:online-softmax}, fusing the max and summation loops in softmax. While not impossible to write an automatic fusion for this pattern\ivan{todo: write actual pattern}, it does introduce an error term, making it unsuitable for automatic optimizations by compiler frameworks such as IREE.
 
 \ivan{i wonder if by doing so, autodiff of attention is also easier to derive/optimize?}
 
@@ -443,321 +449,6 @@ However, the same cannot be said of reduction loops. Due to intra-loop dependenc
 
 %% Bibliography
 \bibliography{references}
-
-
-%% Appendix
-% Move \cleardouble and \appendix out of `draftonly` if you are using the
-% appendix
-\begin{draftonly}
-\cleardoublepage
-\appendix
-\section{Formatting and Writing Guidelines}
-
-These formatting guidelines aim to standardize our writing. They ensure that
-papers with multiple authors have a consistent look and that commonly occurring
-items are formatted in ways that are known to work well.
-
-\subsection{Figures}
-\label{appendix:figures}
-
-\paragraph{Referencing Figures} When referencing figures from the text we
-ensure the following:
-\begin{description}
-      \item [All figures are referenced] A paper with un-referenced figures appears incomplete.
-        We can check this using the \texttt{refcheck} package.
-        Issuing \texttt{make refcheck} on the commandline lists all \emph{labeled} elements that are not referenced in the text.
-      \item [References to figures are brief and easy to skip]~\\
-                We minimize the number of words needed to refer to a figure. Reducing
-                the number of non-information-carrying words directly increases
-		the density of interesting content. When skipping references
-		becomes easy, reading quickly while ignoring figures remains a
-		smooth experience. The best and briefest reference to a figure
-		is a link in parenthesis that is added after the subject
-		representing the content depicted in a figure:\\
-		{\color{pairedTwoDarkBlue}\textit{Figure
-		X shows the design of A, which consists of ...}}\\
-		$\to$ {\color{pairedFourDarkGreen}
-		\textit{The design of A (Figure X) consists of ...}}
-      \item [The text is always self-contained without figures] ~\\ The reader
-                should be able to read the text without ever looking at any
-                figure. They should still understand the text and get the key
-		message of each figure directly from the text. By not forcing
-		the reader to analyze a figure while reading, we increase
-		readability as the reader can continue reading without having
-		to skip between text and figures. Such writing style also helps
-		to guide the thoughts of the reader, who can (for a moment)
-		trust our summary of the figure and does not need to develop
-		their own interpretation on-the-fly, a task which often yields
-		results that do not fit the flow of our exposition. Readers
-		typically only feel that their reading is interrupted if there
-		is no explanation of a figure at all. Hence, we do not need to
-		discuss all details of a figure, but half a sentence that explains the
-		core idea is typically sufficient for a reader to continue
-		reading.  By making
-		our text self-contained even when ignoring figures the reader
-		experiences a smooth and uninterrupted reading experience.\\
-		{\color{pairedTwoDarkBlue}
-		\textit{The speedups are presented in Figure X. < a new topic> }}\\
-		$\to$ {\color{pairedFourDarkGreen}\textit{Our approach outperforms the state of the art
-		XXX-library (Figure 3) demonstrating more than 4x speedup on
-		test case 1 and 2 and a geometric mean speedup of 1.5x over all
-		20 test cases.}}
-\end{description}
-We reference figures in text using
-\texttt{\symbol{92}autoref\{fig:speedup\}} for a figure with label
-\texttt{fig:speedup}.  The use of autoref ensures that all references
-to figures are formatted consistently, e.g. as \autoref{fig:speedup}.
-
-\paragraph{Color Scheme}
-
-In Figures we use a color scheme that is print-friendly and also visible
-with red-green blindness. The following colors are all print-friendly
-and red-green save when only using Color 1-4:
-
-\medskip
-{
-	\small
-\newcolumntype{a}{>{\columncolor{pairedOneLightBlue}}c}
-\newcolumntype{b}{>{\columncolor{pairedTwoDarkBlue}}c}
-\newcolumntype{d}{>{\columncolor{pairedThreeLightGreen}}c}
-\newcolumntype{e}{>{\columncolor{pairedFourDarkGreen}}c}
-\newcolumntype{f}{>{\columncolor{pairedFiveLightRed}}c}
-\newcolumntype{g}{>{\columncolor{pairedSixDarkRed}}c}
-
-\begin{tabular}{a b d e f g}
-Color 1 & Color 2 & Color 3 & Color 4 & Color 5 & Color 6\\
-\#a6cee3 & \#1f78b4 & \#b2df8a & \#33a02c & \#fb9a99 & \#e31a1c
-\end{tabular}
-}
-
-We de-emphasize components in figures by using additionally two shades of gray.
-Especially in complex figures, it is often helpful to de-emphasize visual
-elements that we want to represent but that should not be the focus of a
-reader's attention.
-
-\medskip
-{
-	\small
-\newcolumntype{h}{>{\columncolor{pairedNegOneLightGray}}c}
-\newcolumntype{i}{>{\columncolor{pairedNegTwoDarkGray}}c}
-
-\begin{tabular}{h i}
-Color -1 & Color -2\\
-\#cacaca & \#827b7b\\
-\end{tabular}
-}
-
-Single-color graphs are plotted in Color 1 - Light Blue.
-
-\paragraph{Labels in Figures}
-Complex diagrams often benefit from labels inside the diagrams. We suggest to
-use a filled circle (e.g, in light blue) to highlight these numbers and use
-these references, e.g., \circled{1} implemented as \texttt{\textbackslash{}circled\{1\}}, in the text to refer to them.
-
-\paragraph{Captions and Core Message}
-\label{appendix:captions}
-
-Each figure should have a caption that makes a clear statement about this
-figure, as such a statement makes it easier for the reader to (in)validate the
-figure as evidence for the claim we make. Traditionally, figures often have a
-caption indicating its content:\\ {\color{pairedTwoDarkBlue} \textit{$\cdot$
-Speedup of approach A vs approach B on system X}}\\ {\color{pairedTwoDarkBlue}
-\textit{$\cdot$ Architecture diagram of our solution}}\\ While these statements
-clearly state the content of a figure at the meta-level, they often lack
-information about the precise content and the claim a figure is meant to
-evidence. While knowing that a figure is an architecture diagram is useful for
-the reader when looking at the figure the reader automatically asks two
-questions: (a) what properties set this architecture apart and (b) does its
-implementation deliver the claimed properties? Or, in more general terms, what
-claims do we aim to evidence with this figure and does the figure provide the
-needed evidence to support our claims? In theory, this information could be
-contained in the text of the paper, but to optimize for readers who skim the
-figures first, we want to offer them as part of the caption. Nevertheless, it
-makes often sense to word the caption strategically to still document the
-meta-level content of a figure.\\ $\to$ {\color{pairedFourDarkGreen}
-\textit{$\cdot$ Approach A is consistently faster than approach B, except for
-inputs that are not used in practice}}\\ $\to$ {\color{pairedFourDarkGreen}
-\textit{$\cdot$ The architecture of our design increases reusability by making
-components A, B, \& C independent of the core.}} For example, after reading the
-last caption the reader can validate if the architecture design indeed enables
-the promised independence, and we can double-check while drafting the paper that
-our figure is visualized to facilitate checking if it works as evidence. ! This
-does not mean we should mislead with our figure but rather make things easy to
-check. If our figure or data would not support our claim, it should be similarly
-easy to invalidate our claim!
-
-\subsubsection{Plots} We use matplotlib to create performance
-plots such as \autoref{fig:speedup}. We use the following
-formatting guidelines:
-\begin{itemize}
-  \item Use a vertical y-label to make it easier to read.
-  \item Remove top and right frames to reduce visual noise
-	and allow the reader to focus on the data in the
-	figure.
-  \item Provide the concrete data at the top of each bar.
-\end{itemize}
-
-\noindent
-We also suggest to follow these technical remarks:
-\begin{itemize}
-  \item Create pdf plots and do not use bitmap formats (e.g., png) to
-	ensure high quality when zooming in.
-  \item Avoid Type-3 bitmap fonts by
-	setting fonttype to 42.
-\end{itemize}
-
-\begin{figure}
-\includegraphics[width=\columnwidth]{plots/speedup}
-\caption{Improved running speed after 4 weeks of training.
-}
-\label{fig:speedup}
-\end{figure}
-
-\subsubsection{Tables} We optimize our tables for readability by removing as
-much clutter as possible, while highlighting the key structure. Markus Püschel
-(see doc/paper-writing/guide-tables.pdf) wrote a nice guide on how to make nice
-tables. \autoref{tab:simple_table} illustrates this with a simple
-table.
-
-\begin{table}
-\ra{1.2}
-\centering
-\begin{tabular}{l l l r}
-  \toprule
-  \textbf{Animal} & \textbf{Size} & \textbf{Biotope} & \textbf{Age}\\
-  \midrule
-  Dog & Medium & Ground & 20\\
-  Cat & Medium & Ground &20 \\
-  Ant & Small & Ground & 30 \\
-  Elephant & Large & Ground & 70\\
-  Whale & Large & Water & 100\\
-  Salmon & Medium & Water & 13 \\
-  Eagle & Large & Air & 35 \\
-  \bottomrule
-\end{tabular}
-\vspace{1em}
-\caption{A table with heigh lines and emphasized header.}
-\label{tab:simple_table}
-\end{table}
-
-\subsubsection{Listings} We aim to use minted to create listings as much as
-possible, as this allows us to edit code quickly. We use syntax highlighting
-to make the parts of the code that matter most stand out. Hence, we keep
-most code black, comments gray, and highlight just the MLIR operands that
-we care about most.
-
-\begin{listing}[H]
-% We cannot put '{' on a line after % in draftonly mode, as the hack we used to
-% not include the draft section will interpret the listing as normal
-% latex where '%' is a comment and {} need to match, which they will
-% not if only one is commented.
-\begin{mlir}
-// This is a comment
-def @foo(%0 : !dialect.type)
-{
-  %a = dialect.op(%0) : !dialect.type // $\color{black}\circled{a}$
-}
-\end{mlir}
-\caption{A simple MLIR code example with markers. Markers can also be placed in
-	captions and refer to labels, e.g. \circled[lst:example]{a}.}
-\label{lst:example}
-\end{listing}
-
-\begin{listing}[H]
-\begin{lean4}
-theorem funext {f₁ f₂ : ∀ (x : α), β x}
-  (h : ∀ x, f₁ x = f₂ x) : f₁ = f₂ := by
-  show extfunApp (Quotient.mk' f₁) =
-       extfunApp (Quotient.mk' f₂)
-  apply congrArg
-  apply Quotient.sound
-  exact h
-\end{lean4}
-\caption{A simple Lean4 code example, taken from
-  \url{https://lean-lang.org/lean4/doc/syntax\_highlight\_in\_latex.html\#example-with-minted}.}
-\end{listing}
-
-The syntax highlighting also works for xDSL-like IRs.
-Notice that different minted styles can be used for different environments.
-The xDSL environment uses the murphy-style in this case, whereas the MLIR version applies the colorful-style.
-
-\begin{xdsl*}{fontsize=\scriptsize}
-func.func() [sym_name = "main", function_type = !fun<[
-              !iterators.columnar_batch<!tuple<[!i64]>>
-                 ], []>] {
-  ^bb0(%0 : !iterators.columnar_batch<!tuple<[!i64]>>):
-    %t : !iterators.stream<!llvm.struct<[!i64]>> =
-      iterators.scan_columnar_batch(%0 : ...)
-    %filtered : !iterators.stream<!llvm.struct<[!i64]>> =
-          iterators.filter(%input : …) [predicateRef = @s0]
-    iterators.sink(%filtered : !iterators.stream<!tuple<[!i64]>>)
-    func.return()
-}
-
-func.func() [sym_name = "s0", function_type = !fun<[
-    !llvm.struct<[!i64]>], [!i1]>] {
-  ^bb0(%struct : !llvm.struct<[!i64]>):
-    %id : !i64 = llvm.extractvalue(%struct : ...)
-              [position = [0 : !index]]
-    %five  : !i64 = arith.constant() [value = 5 : !i64]
-    %cmp : !i1 = arith.cmpi(%id : !i64, %five : !i64)
-              [predicate = 4 : !i64]
-    func.return(%cmp : !i1)
-}
-\end{xdsl*}
-
-The code in this document was compiled with minted version: \csname ver@minted.sty\endcsname.
-
-\section{Writing}
-
-A couple of hints with respect to how we write text.
-
-\subsection{Citations}
-\label{appendix:citations}
-
-\subsubsection{Do not use numerical citations as nouns}
-Especially when working with numerical citations (e.g., [1]) the use of
-citations as nouns reduces readability. Hence, we do not use numerical citations
-as nouns and instead expand these citations with \texttt{\textbackslash{}citet} to the
-authornames.
-\\
-{\color{pairedTwoDarkBlue}
-\textit{[1] showed that .. $\dots$}}\\
-$\to$ {\color{pairedFourDarkGreen}\textit{Author et al. [1] showed}}
-
-\subsubsection{Prefer meaningful text over citations as textual content}
-While acknowledging authors of work is important, maximizing the amount of technical
-content (outside of a historic perspective) typically makes text more direct and
-concrete. Hence, we avoid the discussion of who did what in text if the
-historic context does not add meaning or empty words can be replaced by an immediate
-citation. E.g, in the following the words `introduced in` are not carrying
-information and can be dropped.\\
-{\color{pairedTwoDarkBlue}
-\textit{we extend PreviousIdea introduced in [1] $\dots$ by}}\\
-$\to$ {\color{pairedFourDarkGreen}\textit{we extend PreviousIdea [1] by}}
-
-
-\subsubsection{Managing acronyms automatically}
-Managing acronyms manually can lead to situations where the specific term is not properly expanded upon first use or when it is introduced.
-The \texttt{acronym} package is useful to avoid such situations and provides full control over acronyms.
-The expanded form of an abbreviation should be in lowercase, unless its parts are also capitalized (e.g., United Kingdom for UK).
-For example, assume we have defined an acronym with \texttt{\textbackslash{}newacronym\{ir\}\{IR\}\{intermediate representation\}}:
-\begin{itemize}
-  \item Upon first use of \texttt{\textbackslash{}ac\{ir\}} we get: \ac{ir}.
-  \item On the second reference: \ac{ir}.
-  \item To force expansion (e.g., for the background section where the term is first described), we use \texttt{\textbackslash{}acf\{ir\}} which gives: \acf{ir}.
-  \item To force contraction (e.g., to save space for a figure caption), we use \texttt{\textbackslash{}acs\{ir\}} which gives: \acs{ir}.
-  \item To obtain plural form, we use \texttt{\textbackslash{}acp\{ir\}} giving: \acp{ir}.
-\end{itemize}
-
-\subsubsection{Adding hyphenation rules}
-While \LaTeX\ handles word breaks automatically, and packages like \texttt{microtype} aim to minimize word splitting, there are instances where either new words lack hyphenation rules, or the suggested hyphenation for a word is undesirable.
-The \texttt{hyphenat} package allows adding hyphenation rules using the \texttt{\textbackslash{}hyphenation} macro, e.g., \texttt{\textbackslash{}hyphenation\{Alex-Net\}} for AlexNet.
-
-Allowing hyphenation of compound words, we can use \texttt{\textbackslash{}-/} from the \texttt{extdash} package, for example \texttt{high\-/level} can be written as \texttt{high\textbackslash{}-/level}.
-Disallowing a line break at the compound word hyphen, we can use \texttt{\textbackslash{}=/}, as \texttt{RISC\textbackslash{}=/V} for \texttt{RISC\=/V}.
-
-\end{draftonly}
 
 
 \end{document}
