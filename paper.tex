@@ -8,7 +8,7 @@
   \def\paperversion{draft}
 \fi
 
-\documentclass[review, anonymous, acmsmall]{acmart}
+\documentclass[review, anonymous, sigplan]{acmart}
 
 \def\acmversionanonymous{anonymous}
 \def\acmversionjournal{journal}
@@ -217,7 +217,7 @@
 
 % (http://www.easterbrook.ca/steve/2010/01/how-to-write-a-scientific-abstract-in-six-easy-steps/)
 
-  When attention is all you need, all attention is on attention. Various attention variants have risen in order to reduce the memory or computation complexity of the attention mechanism, adopting online methods, virtual paging, and many other techniques. However, while tensor programming languages are much easier for machine learning engineers and mathematicians to reason with, they are too abstract to capture the low-level mechanisms that are being optimized, and a performance engineer needs to be brought in to maximize hardware usage using block programming frameworks such as Triton. Kernels written at such a low-level, while efficient, are often inflexible and obscure the mathematics, making research and iteration on the attention mechanism slow and tedious. We demonstrate that, by describing tensor operations as perfectly nested loops, automatic compiler optimizations and rewrites can be more easily applied, achieving the high parallelizability and low memory cost that online algorithms afford while retaining the flexibility that tensor languages afford.
+  Various attention variants have risen in order to reduce the memory or computation complexity of the attention mechanism, adopting online methods, virtual paging, and many other techniques. However, kernels written at such a low-level, while efficient, are often inflexible and obscure the mathematics, making research and iteration on the attention mechanism slow and tedious. Machine learning engineers vastly prefer writing in tensor languages, which simply describe the linear algebra computations but are more difficult to optimize. We demonstrate that, by describing the tensor operations in attention as perfectly nested loops, automatic compiler optimizations and rewrites can be more easily applied, achieving the high parallelizability and low memory cost that online algorithms afford while retaining the flexibility that tensor languages afford.
 \end{abstract}
 
 % Only add ACM notes and keywords in camera ready version
@@ -269,9 +269,9 @@ The majority of machine learning research is taught and researched in high-level
 
 On the other hand, when it comes to maximizing the usage of the hardware, close-to-the-metal kernel programming languages such as CUDA and OpenCL tended to be used. These kernel programming languages operated on the single-program, multiple-data (SPMD) model, where each thread is assigned a single program instance. Along with hardware-specific instructions, they allowed programmers to describe workgroups, reasonining about the parallelism of the program and definining exactly which data each thread would fetch, and how the threads would cooperate and synchronize. With such low-level semantics, however, the mathematics of such a kernel was obscured and tended to be difficult to iterate upon.
 
-Block programming languages (eg. Triton, TileIR, etc.) were devised as a middle-ground solution, bringing tensor operations and shape broadcasts to the kernel languages while retaining the pointer arithmetic and workgroup distribution. However, rather than operate on individual threads, programmers now reasoned about individual workgroups, leaving the distribution and synchronization to the compiler to handle. This approach was incredibly successful, and even PyTorch's own attention mechanism ($\texttt{scaled\_dot\_product\_attention}$) is written as a Triton kernel. However, by retaining both mathematical and hardware semantics, block languages also keep the issue of obscuring the mathematics of the program and calcifying the program against further experimentation, albeit to a lower degree. As a bottom-up approach, block programming languages enabled kernel programmers to more easily write kernels, however, they did not lower the barrier to entry for high-level programmers.
+Block programming languages (eg. Triton, TileIR, etc.) were devised as a middle-ground solution, bringing tensor operations and shape broadcasts to the kernel languages while retaining the pointer arithmetic and workgroup distribution. However, rather than operate on individual threads, programmers now reasoned about individual workgroups, leaving the distribution and synchronization to the compiler to handle. This approach was incredibly successful, and even PyTorch's own attention mechanism is written as a Triton kernel. However, by retaining both mathematical and hardware semantics, block languages also retain the issue of blurring the mathematics of the program and calcifying the program against further experimentation, albeit to a lower degree. As a bottom-up approach, block programming languages enabled kernel programmers to more easily write kernels, however, they did not lower the barrier to high performance code for high-level programmers.
 
-The machine learning compiler community, as well as this paper, adopts a top-down approach. Rather than introducing high-level semantics to a low-level representation, machine learning compilers heavily utilize tiling to automatically lower to low-level semantics while retaining the high-level representation. The result is a program where the mathematics remains clear and visible, although in practice, a compiler-optimized kernel can never reach the speed of a hand-written kernel, only get close.
+The machine learning compiler community, as well as this paper, adopts a top-down approach. Rather than introducing high-level semantics to a low-level representation, machine learning compilers heavily utilize tiling to automatically apply hardware optimizations such as block-level parallelism and vectorization, while retaining the high-level representation for the frontend programmer. The result is a program where the mathematics is simple and easily iterable, although in practice, a compiler-optimized kernel can never reach the speed of a hand-written kernel, only get close.
 
 Our paper describes a technique for writing attention in a tensor programming language such that the compiler is able to tile it. In particular, we isolate the exponentiation pattern in the softmax mechanism and transform it into an online algorithm, as per the work of Milakov et al.~\cite{milakov_online_2018}. We chose to isolate our problem to attention as this rewrite significantly changes the floating point arithmetic of the program, preventing the rewrite from being applied in generic situations. Even so, attention as a field of research still garners enough effort that it makes sense to target it specifically.
 
@@ -329,9 +329,9 @@ This small operation set is supported by the DSLs of many machine learning frame
 
 While suitable for programming neural networks and other scientific programs, the semantics of tensor programming languages are too high level to properly optimize for the hardware, in particular, GPUs. Diametrically opposed are thread programming languages such as CUDA, OpenCL and compute shaders, which operate on a SIMT model. SIMT programming languages allow programmers to properly specify and tile the work for the hardware, at the cost of losing the expressibility of tensor languages. 
 
-\paragraph{Block programming languages} To both capture the high-level semantics of tensor languages and the low-level control afforded by thread languages, block programming languages such as Triton were devised. Where thread languages operate on a SIMT model, designating a program ID per thread, block programming languages are defined per block. Each block is assigned a program ID, and corresponds to a work group in OpenCL or a thread block in CUDA. The thread distribution of a block is left up to the compiler to designate. Block programming languages have since supplanted low-level thread languages' place for writing tensor kernels -- to wit, the default PyTorch attention kernel is written in Triton.
+\paragraph{Block programming languages} To both capture the high-level semantics of tensor languages and the low-level control afforded by thread languages, block programming languages such as Triton were devised. Where thread languages operate on a SPMD model, designating a program ID per thread, block programming languages are defined per block. Each block is assigned a program ID, and corresponds to a work group in OpenCL or a thread block in CUDA. The thread distribution of a block is left up to the compiler to designate. Block programming languages have since supplanted low-level thread languages' place for writing tensor kernels.
 
-While block programming languages prove to make writing linear algebra kernels easier for performance engineers, the same cannot be said for research engineers writing in tensor languages. The optimizations calcify the mathematics into code, making iteration and experimentation on the mathematics of the program much more tediou. Within the field of exploring attention variants, our work provides a framework to make it easier for compilers to easily optimize the attention mechanism itself, while retaining only the high-level semantics of tensor semantics. \ivan{i like the transition, i don't like the words.}
+While block programming languages prove to make writing linear algebra kernels easier for performance engineers, the same cannot be said for research engineers writing in tensor languages. The optimizations calcify the mathematics into code, making iteration and experimentation on the mathematics of the program much more tedious. Within the field of exploring attention variants, our work provides a framework to make it easier for compilers to easily optimize the attention mechanism itself, while retaining only the high-level semantics of tensor semantics. \ivan{i like the transition, i don't like the words.}
 
 \section{Implementation}
 \label{sec:implementation}
@@ -345,28 +345,46 @@ While block programming languages prove to make writing linear algebra kernels e
     $V : \mathbb{R}^{N \times d}$}
 
     \State $S, P : \mathbb{R}^{N \times N} \qquad 
+            O : \mathbb{R}^{N \times d} \qquad
             m, \sigma :\mathbb{R}^N$
     \State Initialize $m = (-\infty)^N \quad \sigma = (0)^N$,
 
     % matmul
-    \ForAll {$i,j,k \in [N,N,d]$} 
-      \State $S_{i,j} = Q_{i,k} \cdot K_{j,k}$
+    \State \emph{Computing $S$ as per \autoref{eqn:dot-attention}}
+    \ForAll {$i,j \in [N,N]$}  
+      \ForAll {$k \in [d]$}  
+        \State $S_{i,j} := S_{i,j} + Q_{i,k} \cdot K_{j,k}$
+      \EndFor
     \EndFor
 
     % softmax
-    \ForAll {$i,j \in [N,N]$} \Comment \emph{reduction}
-      \State $m_i = \text{max}(m_i, S_{i,j})$
+    \State \emph{Calculate the row maximum}
+    \ForAll {$i \in [N]$} 
+      \ForAll {$j \in [N]$} 
+        \State $m_i := \text{max}(m_i, S_{i,j})$
+      \EndFor
     \EndFor
-    \ForAll {$i,j \in [N,N]$} \Comment \emph{reduction}
-      \State $\sigma_i = \sigma_i + e^{m_i - S_{i,j}}$
+
+    \State \emph{Calculate the softmax denominator}
+    \ForAll {$i \in [N]$} 
+      \ForAll {$j \in [N]$} 
+        \State $\sigma_i := \sigma_i + e^{m_i - S_{i,j}}$
+      \EndFor
     \EndFor
-    \ForAll {$i,j \in [N,N]$} 
-      \State $P_{i,j} = (e^{m_i - S_{i,j}}) / \sigma_i$
+
+    \State \emph{Scale the rows by the softmax denominator}
+    \ForAll {$i \in [N]$} 
+      \ForAll {$j \in [N]$} 
+        \State $P_{i,j} = (e^{m_i - S_{i,j}}) / \sigma_i$
+      \EndFor
     \EndFor
 
     %matmul
-    \ForAll {$i,j,k \in [N,d,N]$} 
-      \State $O_{i,j} = P_{i,k} \cdot V_{k,j}$
+    \State \emph{Computing $O$ as per \autoref{eqn:dot-attention}}
+    \ForAll {$i,j \in [N,d]$}  
+      \ForAll {$k \in [N]$}  
+        \State $O_{i,j} = P_{i,k} \cdot V_{k,j}$
+      \EndFor
     \EndFor
 
     \Return $O$
@@ -387,34 +405,56 @@ In the MLIR compiler framework, the tensor programming language is expressed usi
 A producing parallel operation can be trivially merged into a consuming parallel operation if the iteration domain matches.
 However, the same cannot be said of reduction loops. Due to intra-loop dependencies, a producer-consumer pair of reductions is non-trivial to fuse manually, let alone automatically. 
 
-\subsection{Manual Transformations}
-The softmax algorithm exhibits the trait of being a producer-consumer pair of reduction loops. Observe how, in Algorithm~\ref{alg:dot-attention}, the max result $m$ is produced by the loop at Line 5, then used in the consuming loop in Line 8 to compute $\sigma$. However, fusion can be done manually.
+\ivan{i REALLY don't like this part and i want to rewrite it}
 
+\subsection{Target Rewrite}
+
+In the end, we want to write attention such that it achieves the form in \autoref{alg:fused-dot-attention}, which is derived from \autoref{alg:dot-attention} by fusing the reduction loops into a single reduction loop. To do this, we applied the exponentiation pattern observed in the work of Milakov et al.~\cite{milakov_online_2018} on the online softmax algorithm, as observed in lines 
+Lines 12 and 13. We also moved the softmax division by the accumulator into a separate loop, to avoid dividing multiple times.
 
 \begin{algorithm}
-  \caption{Online softmax algorithm~\cite{milakov_online_2018} \label{alg:online-softmax}}
+  \caption{Attention, expressed as two matrix multiplications.\label{alg:fused-dot-attention}}
   \begin{algorithmic}[1]
-  \Function{Softmax}{$x: \mathbb{R}^{N}$}
-    
-    \State $y = \mathbb{R}^{N}, m, d :\mathbb{R}^{N+1}$
-    \State Initialize $m_0 = (-\infty)^N, \quad d_0 = (0)^N$
+  \Function{Attention}{
+    $Q : \mathbb{R}^{N \times d}$,
+    $K : \mathbb{R}^{N \times d}$,
+    $V : \mathbb{R}^{N \times d}$}
 
-    \For {$i = 1 \to N$} 
-      \State $m_{j} = \text{max}(m_{j-1}, x_j)$
-      \State $d_j = d_{j-1} \times e^{m_{j - 1} - m_j} + e^{x_j - m_j}$
+    \State $S : \mathbb{R}^{N \times N} \qquad 
+            O : \mathbb{R}^{N \times d} \qquad
+            m, \sigma :\mathbb{R}^N$
+    \State Initialize $m = (-\infty)^N \quad \sigma = (0)^N$,
+
+    % matmul
+    \State \emph{Computing $S$ as per \autoref{eqn:dot-attention}}
+    \ForAll {$i,j \in [N,N]$}  
+      \ForAll {$k \in [d]$}  
+        \State $S_{i,j} := S_{i,j} + Q_{i,k} \cdot K_{j,k}$
+      \EndFor
     \EndFor
-    \ForAll {$i \in [N]$} 
-      \State $y_{i} = (e^{x_i - m_N}) / d_N$
+
+
+    % softmax
+    \ForAll {$i \in [N]$}
+      \ForAll {$j \in [N]$}
+        \State $m_i := \text{max}(m_i^{j-1}, S_{i,j})$
+        \State $\sigma_i^j := \sigma_i^{j-1} \times e^{m_i - m_i^{j-1}} + e^{S_{i,j} - m_i}$
+        \State $O_{i,j} := O_{i,j} \times e^{m_i - m_i^{j-1}} + e^{S_{i,j} - m_i} \cdot V_{j}$
+      \EndFor
     \EndFor
-    
-    \Return $y$
+
+    \ForAll {$i,j \in [N,N]$} 
+      \State $O_{i,j} := O_{i,j} / \sigma_i$
+    \EndFor
+
+    \Return $O$
   \EndFunction
   \end{algorithmic}
 \end{algorithm}
 
-The online softmax algorithm developed by Milakov~\cite{milakov_online_2018} is shown in \autoref{alg:online-softmax}, fusing the max and summation loops in softmax. While not impossible to write an automatic fusion for this pattern\ivan{todo: write actual pattern}, it does introduce an error term, making it unsuitable for automatic optimizations by compiler frameworks such as IREE.
-
 \ivan{i wonder if by doing so, autodiff of attention is also easier to derive/optimize?}
+
+\subsection{Loop tiling, loop fusion}
 
 \section{Related Work}
 
